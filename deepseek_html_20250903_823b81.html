@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>彈簧自動化設計生成器</title>
+    <style>
+        body { font-family: sans-serif; margin: 2rem; }
+        .input-group { margin-bottom: 1rem; }
+        label { display: inline-block; width: 250px; }
+        input, select { padding: 5px; }
+        button { padding: 10px 20px; background-color: #4CAF50; color: white; border: none; cursor: pointer; }
+        button:hover { background-color: #45a049; }
+        .output { background-color: #f4f4f4; padding: 1rem; margin-top: 1rem; border-radius: 5px; }
+        .result-table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+        .result-table th, .result-table td { border: 1px solid #ddd; padding: 8px; text-align: center; }
+        .result-table th { background-color: #f0f0f0; }
+        .recommended { background-color: #e6ffe6 !important; font-weight: bold; }
+        .warning { color: red; }
+        .solution-header { cursor: pointer; background-color: #ddd; padding: 10px; margin-top: 5px; }
+        .solution-details { display: none; padding: 10px; background-color: #eee; }
+    </style>
+</head>
+<body>
+    <h1>壓縮彈簧自動化設計生成器</h1>
+    <p>請輸入您的設計目標，系統將自動計算符合 JIS/DIN/ASTM 標準的可行方案。</p>
+
+    <div class="input-group">
+        <label for="targetForce">目標工作力量 F (N):</label>
+        <input type="number" id="targetForce" step="1" value="50">
+    </div>
+    <div class="input-group">
+        <label for="targetTravel">目標工作行程 δ (mm):</label>
+        <input type="number" id="targetTravel" step="1" value="10">
+    </div>
+    <div class="input-group">
+        <label for="maxOD">最大允許外徑 (OD_max, mm):</label>
+        <input type="number" id="maxOD" step="0.1" value="15">
+    </div>
+    <div class="input-group">
+        <label for="minLength">最小安裝長度 (L_min, mm):</label>
+        <input type="number" id="minLength" step="1" value="30">
+    </div>
+    <div class="input-group">
+        <label for="material">彈簧材料 (G值, N/mm²):</label>
+        <select id="material">
+            <option value="79000">鋼材 (Music Wire, G=79,000)</option>
+            <option value="72000" selected>不鏽鋼 (SS302/304, G=72,000)</option>
+            <option value="43000">磷青銅 (Phosphor Bronze, G=43,000)</option>
+        </select>
+    </div>
+    <div class="input-group">
+        <label for="maxStress">材料許用剪應力 [τ] (MPa):</label>
+        <input type="number" id="maxStress" value="400">
+    </div>
+
+    <button onclick="autoDesignSpring()">開始自動設計</button>
+
+    <div id="results" class="output"></div>
+
+    <script>
+        // 定義標準線徑陣列 (mm) - 取自常用標準
+        const standardWireDiameters = [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.3, 2.6, 3.0, 3.5, 4.0];
+        // 定義標準中徑陣列 (mm) - 通常會根據外徑限制來動態生成，這裡先定義一個範圍
+        const standardMeanDiameters = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+
+        function autoDesignSpring() {
+            // 1. 獲取使用者輸入的設計目標
+            const G = parseFloat(document.getElementById('material').value);
+            const targetForce = parseFloat(document.getElementById('targetForce').value);
+            const targetTravel = parseFloat(document.getElementById('targetTravel').value);
+            const maxOD = parseFloat(document.getElementById('maxOD').value);
+            const minLength = parseFloat(document.getElementById('minLength').value);
+            const allowableStress = parseFloat(document.getElementById('maxStress').value);
+
+            // 2. 計算所需的彈簧常數
+            const targetK = targetForce / targetTravel; // N/mm
+
+            let feasibleSolutions = []; // 儲存所有可行方案的陣列
+
+            // 3. 自動化迭代核心：遍歷所有可能的線徑(d)和中徑(D)組合
+            for (const d of standardWireDiameters) {
+                // 線徑不能太大，否則外徑會超限 (OD = D + d)
+                if (d > maxOD) continue;
+
+                for (const D of standardMeanDiameters) {
+                    // 檢查外徑是否超過限制
+                    const OD = D + d;
+                    if (OD > maxOD) continue;
+
+                    // 計算彈簧指數 C，並過濾掉不在合理範圍內的 (例如只考慮 4-12)
+                    const C = D / d;
+                    if (C < 4 || C > 12) continue;
+
+                    // 從公式 k = (G * d^4) / (8 * D^3 * n) 反推所需的有效圈數 n
+                    const n = (G * Math.pow(d, 4)) / (8 * Math.pow(D, 3) * targetK);
+
+                    // 圈數必須是正數，且通常大於 2圈，小於 50圈（可調整）
+                    if (n < 2 || n > 50) continue;
+
+                    // 計算此方案下的最大應力
+                    const K = (4 * C - 1) / (4 * C - 4) + 0.615 / C; // Wahl 修正係數
+                    const F_max = targetForce; // 使用目標力
+                    const tau_max = (8 * F_max * D * K) / (Math.PI * Math.pow(d, 3)); // 最大工作剪應力 (MPa)
+
+                    // 應力必須小於許用應力，並留有一定安全餘量（這裡簡單判斷）
+                    if (tau_max > allowableStress) continue;
+
+                    // 計算壓並高度和自由長度
+                    const solidHeight = (n + 2) * d; // 假設兩端磨平
+                    const freeLength = solidHeight + targetTravel; // 自由長 = 壓並高 + 行程
+
+                    // 自由長度必須大於最小安裝長度，否則裝不進去
+                    if (freeLength < minLength) continue;
+                    // 壓並高度必須小於最小安裝長度，否則會壓死
+                    if (solidHeight > minLength) continue;
+
+                    // 計算安全餘量
+                    const stressSafetyFactor = (allowableStress / tau_max).toFixed(2);
+                    const solidHeightSafetyMargin = (minLength - solidHeight).toFixed(2);
+
+                    // 所有條件都滿足！這是一個可行方案，將其存入陣列
+                    feasibleSolutions.push({
+                        d: d,
+                        D: D,
+                        OD: OD,
+                        C: C,
+                        n: n,
+                        freeLength: freeLength,
+                        solidHeight: solidHeight,
+                        k: targetK, // 計算出的k會非常接近targetK
+                        tau_max: tau_max,
+                        stressSafetyFactor: stressSafetyFactor,
+                        solidHeightSafetyMargin: solidHeightSafetyMargin,
+                        // 為方案評分，C值在6-9之間得分最高
+                        score: rateSolution(C, tau_max, allowableStress, n)
+                    });
+                }
+            }
+
+            // 4. 對所有可行方案進行排序（按分數從高到低）
+            feasibleSolutions.sort((a, b) => b.score - a.score);
+
+            // 5. 在網頁上顯示結果
+            displayResults(feasibleSolutions, targetK);
+        }
+
+        function rateSolution(C, tau_max, allowableStress, n) {
+            let score = 0;
+            // C值在最佳區間（6-9）得分最高
+            if (C >= 6 && C <= 9) score += 100;
+            else if (C >= 5 && C < 6) score += 70;
+            else if (C > 9 && C <= 10) score += 70;
+            else if (C >= 4 && C < 5) score += 40;
+            else if (C > 10 && C <= 12) score += 40;
+            else score += 0;
+
+            // 應力安全係數越高越好（但不要過高，否則材料浪費）
+            const stressRatio = allowableStress / tau_max;
+            if (stressRatio > 1.5 && stressRatio < 2.5) score += 50; // 理想安全範圍
+            else if (stressRatio >= 2.5) score += 30; // 安全但有點浪費
+            else if (stressRatio > 1.2 && stressRatio <= 1.5) score += 20; // 安全餘量稍低
+            else if (stressRatio <= 1.2) score -= 100; // 太低，但之前已過濾
+
+            // 圈數適中為好（例如5-20圈）
+            if (n >= 5 && n <= 20) score += 30;
+            return score;
+        }
+
+        function displayResults(solutions, targetK) {
+            const resultsDiv = document.getElementById('results');
+            
+            if (solutions.length === 0) {
+                resultsDiv.innerHTML = "<p class='warning'>❌ 未找到符合所有設計目標和標準的可行方案。請放寬限制（例如增加最大外徑或許用應力，或減小目標力量）後再試。</p>";
+                return;
+            }
+
+            let html = `<h3>自動設計完成！共找到 ${solutions.length} 個可行方案：</h3>`;
+            html += `<p>目標彈簧常數 k = ${targetK.toFixed(4)} N/mm</p>`;
+            html += `<p>推薦方案已按<span class='recommended'>設計優良程度</span>排序（綠色標記）。</p>`;
+
+            // 建立結果表格
+            html += `<table class='result-table'>`;
+            html += `<tr>
+                        <th>排名</th>
+                        <th>線徑 d (mm)</th>
+                        <th>中徑 D (mm)</th>
+                        <th>外徑 OD (mm)</th>
+                        <th>彈簧指數 C</th>
+                        <th>有效圈數 n</th>
+                        <th>自由長度 (mm)</th>
+                        <th>最大應力 (MPa)</th>
+                        <th>安全係數</th>
+                        <th>評價</th>
+                    </tr>`;
+
+            for (let i = 0; i < solutions.length; i++) {
+                const s = solutions[i];
+                const isRecommended = i === 0; // 排名第一的為最推薦方案
+
+                html += `<tr ${isRecommended ? "class='recommended'" : ""}>`;
+                html += `<td>${i + 1}</td>`;
+                html += `<td>${s.d.toFixed(2)}</td>`;
+                html += `<td>${s.D.toFixed(2)}</td>`;
+                html += `<td>${s.OD.toFixed(2)}</td>`;
+                html += `<td>${s.C.toFixed(2)}</td>`;
+                html += `<td>${s.n.toFixed(2)}</td>`;
+                html += `<td>${s.freeLength.toFixed(1)}</td>`;
+                html += `<td>${s.tau_max.toFixed(1)}</td>`;
+                html += `<td>${s.stressSafetyFactor}</td>`;
+                html += `<td>${getCEvaluation(s.C)}</td>`;
+                html += `</tr>`;
+            }
+            html += `</table>`;
+
+            // 顯示最推薦方案的詳細資訊
+            const best = solutions[0];
+            html += `<div class="solution-header" onclick="toggleDetails('best-solution-details')">▼ <strong>最推薦方案詳細參數</strong></div>`;
+            html += `<div id="best-solution-details" class="solution-details">`;
+            html += `<p><strong>規格摘要：</strong> 線徑 ${best.d.toFixed(2)}mm × 中徑 ${best.D.toFixed(2)}mm × 自由長 ${best.freeLength.toFixed(1)}mm × ${best.n.toFixed(2)} 圈</p>`;
+            html += `<p><strong>彈簧常數 k：</strong> ${best.k.toFixed(4)} N/mm (非常接近目標值 ${targetK.toFixed(4)} N/mm)</p>`;
+            html += `<p><strong>彈簧指數 C = D/d：</strong> ${best.C.toFixed(2)} - ${getCEvaluation(best.C)}</p>`;
+            html += `<p><strong>最大工作剪應力 τ：</strong> ${best.tau_max.toFixed(1)} MPa (許用應力: ${document.getElementById('maxStress').value} MPa)</p>`;
+            html += `<p><strong>應力安全係數：</strong> ${best.stressSafetyFactor}</p>`;
+            html += `<p><strong>壓並高度 L<sub>s</sub>：</strong> ${best.solidHeight.toFixed(2)} mm (安裝空間需 > 此值)</p>`;
+            html += `<p><strong>壓並安全餘量：</strong> ${best.solidHeightSafetyMargin} mm (安裝空間長度 - 壓並高度)</p>`;
+            html += `</div>`;
+
+            resultsDiv.innerHTML = html;
+        }
+
+        function getCEvaluation(C) {
+            if (C < 4) return "極差";
+            if (C < 6) return "偏差";
+            if (C <= 9) return "優良";
+            if (C <= 12) return "可接受";
+            return "過鬆";
+        }
+
+        function toggleDetails(id) {
+            const element = document.getElementById(id);
+            if (element.style.display === 'block') {
+                element.style.display = 'none';
+            } else {
+                element.style.display = 'block';
+            }
+        }
+    </script>
+</body>
+</html>
